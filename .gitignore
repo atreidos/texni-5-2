@@ -1,0 +1,40 @@
+# Environment
+.env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+!.env.example
+
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+*.log
+
+# Google service account & credentials (ANY json with private key)
+credentials*.json
+service_account*.json
+*-service-account*.json
+# explicit file — keep even if patterns above change
+lash-491816-4dd0005e2407.json
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Playwright / QA
+playwright-report/
+test-results/
+screenshots/
+
+# OS
+.DS_Store
+Thumbs.db

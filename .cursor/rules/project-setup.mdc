@@ -1,0 +1,89 @@
+---
+description: При старте проекта автоматически создаёт .gitignore и .cursorignore с нужными исключениями
+alwaysApply: true
+---
+
+# Автоматическое создание .gitignore и .cursorignore
+
+При создании нового проекта или если файлы отсутствуют — создай оба файла.
+
+## .gitignore — минимальный набор для Python/Telegram-бота
+
+```
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+*.log
+
+# Google service account (приватные ключи)
+credentials*.json
+service_account*.json
+*-service-account*.json
+
+# Локальные БД
+*.sqlite
+*.sqlite3
+*.db
+
+# Playwright / QA
+playwright-report/
+test-results/
+screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+```
+
+## .cursorignore — что не должно попадать в контекст модели
+
+```
+# Secrets
+.env
+.env.*
+!.env.example
+
+# JSON с приватными ключами (service account и т.п.)
+*.json
+!package.json
+!package-lock.json
+
+# Логи (могут содержать PII)
+*.log
+
+# Локальные БД
+*.sqlite
+*.sqlite3
+*.db
+
+# Python артефакты
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# QA артефакты
+playwright-report/
+test-results/
+screenshots/
+```
+
+## Правило
+
+- Если в проекте есть `.env` — он **всегда** должен быть в обоих файлах
+- Если есть JSON с `"private_key"` — добавь его явно в оба файла
+- `.env.example` всегда разрешён (только плейсхолдеры, без реальных значений)

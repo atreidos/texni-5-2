@@ -1,0 +1,28 @@
+# Secrets — никогда не должны попадать в контекст модели
+.env
+.env.*
+!.env.example
+
+# Google Service Account (содержит приватный ключ)
+*.json
+!package.json
+!package-lock.json
+
+# Логи и временные файлы
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Python артефакты
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# QA артефакты
+playwright-report/
+test-results/
+screenshots/
