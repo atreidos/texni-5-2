@@ -2,7 +2,10 @@
 Booking scenario (Scenario 1).
 
 FSM States:
-  SelectService → SelectDate → SelectTime → EnterName → EnterPhone → ConfirmBooking
+  SelectService → SelectDate → SelectTime → EnterName → SharePhone → ConfirmBooking
+
+Phone is collected via Telegram's native contact-sharing button (no manual typing).
+/start works from any state — clears FSM and returns to main menu.
 """
 from __future__ import annotations
 
@@ -15,6 +18,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
 )
 
 from services import db, calendar as cal, notifications
@@ -29,23 +35,30 @@ class BookingFSM(StatesGroup):
     select_date = State()
     select_time = State()
     enter_name = State()
-    enter_phone = State()
+    share_phone = State()
     confirm = State()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Keyboards
 # ---------------------------------------------------------------------------
 
 def _cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[CANCEL_BTN]])
 
 
+def _main_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💅 Записаться", callback_data="start_booking")],
+        [InlineKeyboardButton(text="📋 Мои записи", callback_data="my_bookings")],
+    ])
+
+
 def _services_kb(services: list[dict]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
             text=f"{s['name']} — {s['price']} ₽",
-            callback_data=f"svc:{s['id']}",  # max ~40 bytes (uuid=36), well within 64-byte limit
+            callback_data=f"svc:{s['id']}",
         )]
         for s in services
     ]
@@ -65,8 +78,8 @@ def _dates_kb(dates: list[str]) -> InlineKeyboardMarkup:
 def _times_kb(slots: list[dict]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
-            text=s["slot_time"][:5],
-            callback_data=f"time:{s['id']}:{s['slot_time'][:5]}",
+            text=str(s["slot_time"])[:5],
+            callback_data=f"time:{s['id']}:{str(s['slot_time'])[:5]}",
         )]
         for s in slots
     ]
@@ -81,8 +94,16 @@ def _confirm_kb() -> InlineKeyboardMarkup:
     ])
 
 
+def _phone_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def _fmt_date(d: str) -> str:
-    """YYYY-MM-DD → DD.MM.YYYY"""
+    """YYYY-MM-DD → 'D мес'"""
     try:
         from datetime import date
         dt = date.fromisoformat(d)
@@ -96,20 +117,16 @@ def _fmt_date(d: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Entry: /start → main menu
+# /start — works from ANY FSM state
 # ---------------------------------------------------------------------------
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💅 Записаться", callback_data="start_booking")],
-        [InlineKeyboardButton(text="📋 Мои записи", callback_data="my_bookings")],
-    ])
     await message.answer(
         "Привет! Я помогу записаться на процедуру наращивания ресниц 💅\n\n"
         "Выберите действие:",
-        reply_markup=kb,
+        reply_markup=_main_menu_kb(),
     )
 
 
@@ -117,11 +134,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 async def cancel_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.message.edit_text("Действие отменено.")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💅 Записаться", callback_data="start_booking")],
-        [InlineKeyboardButton(text="📋 Мои записи", callback_data="my_bookings")],
-    ])
-    await callback.message.answer("Главное меню:", reply_markup=kb)
+    await callback.message.answer("Главное меню:", reply_markup=_main_menu_kb())
     await callback.answer()
 
 
@@ -131,6 +144,7 @@ async def cancel_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "start_booking")
 async def step_select_service(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     services = db.get_services()
     if not services:
         await callback.message.edit_text(
@@ -146,7 +160,7 @@ async def step_select_service(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
 
 
-@router.message(BookingFSM.select_service)
+@router.message(BookingFSM.select_service, ~F.text.startswith("/"))
 async def step_select_service_text(message: Message, state: FSMContext) -> None:
     services = db.get_services()
     await message.answer(
@@ -158,20 +172,16 @@ async def step_select_service_text(message: Message, state: FSMContext) -> None:
 @router.callback_query(BookingFSM.select_service, F.data.startswith("svc:"))
 async def step_service_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     svc_id = callback.data.split(":", 1)[1]
-
-    # Look up service details from DB — name/duration are NOT stored in callback_data
-    # to stay within Telegram's 64-byte callback_data limit
     services = db.get_services()
     service = next((s for s in services if str(s["id"]) == svc_id), None)
     if not service:
         await callback.answer("Услуга не найдена.", show_alert=True)
         return
 
-    svc_name = service["name"]
-    duration = service["duration_min"]
-
     await state.update_data(
-        service_id=svc_id, service_name=svc_name, duration_min=duration
+        service_id=svc_id,
+        service_name=service["name"],
+        duration_min=service["duration_min"],
     )
 
     dates = db.get_free_slots_dates()
@@ -185,7 +195,7 @@ async def step_service_chosen(callback: CallbackQuery, state: FSMContext) -> Non
 
     await state.set_state(BookingFSM.select_date)
     await callback.message.edit_text(
-        f"Услуга: <b>{svc_name}</b>\n\nВыберите дату:",
+        f"Услуга: <b>{service['name']}</b>\n\nВыберите дату:",
         parse_mode="HTML",
         reply_markup=_dates_kb(dates),
     )
@@ -196,12 +206,11 @@ async def step_service_chosen(callback: CallbackQuery, state: FSMContext) -> Non
 # Step 2 — select date
 # ---------------------------------------------------------------------------
 
-@router.message(BookingFSM.select_date)
+@router.message(BookingFSM.select_date, ~F.text.startswith("/"))
 async def step_select_date_text(message: Message, state: FSMContext) -> None:
-    dates = db.get_free_slots_dates()
     await message.answer(
         "Пожалуйста, используйте кнопки ниже 👇",
-        reply_markup=_dates_kb(dates),
+        reply_markup=_dates_kb(db.get_free_slots_dates()),
     )
 
 
@@ -232,7 +241,7 @@ async def step_date_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 # Step 3 — select time
 # ---------------------------------------------------------------------------
 
-@router.message(BookingFSM.select_time)
+@router.message(BookingFSM.select_time, ~F.text.startswith("/"))
 async def step_select_time_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     slots = db.get_free_slots_for_date(data["slot_date"])
@@ -249,7 +258,7 @@ async def step_time_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.set_state(BookingFSM.enter_name)
     await callback.message.edit_text(
-        "Отлично! Теперь введите ваше имя:",
+        "Отлично! Введите ваше имя:",
         reply_markup=_cancel_kb(),
     )
     await callback.answer()
@@ -259,38 +268,35 @@ async def step_time_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 # Step 4 — enter name
 # ---------------------------------------------------------------------------
 
-@router.message(BookingFSM.enter_name, F.text)
+@router.message(BookingFSM.enter_name, F.text, ~F.text.startswith("/"))
 async def step_name_entered(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
     if len(name) < 2:
         await message.answer(
-            "Имя слишком короткое. Пожалуйста, введите ваше имя:",
+            "Имя слишком короткое. Введите ваше имя:",
             reply_markup=_cancel_kb(),
         )
         return
     await state.update_data(client_name=name)
-    await state.set_state(BookingFSM.enter_phone)
+    await state.set_state(BookingFSM.share_phone)
     await message.answer(
-        f"Имя: <b>{name}</b>\n\nВведите номер телефона (например, +7 999 123-45-67):",
+        f"Имя: <b>{name}</b>\n\n"
+        "Нажмите кнопку ниже, чтобы поделиться номером телефона.\n\n"
+        "<i>Чтобы отменить — напишите /start</i>",
         parse_mode="HTML",
-        reply_markup=_cancel_kb(),
+        reply_markup=_phone_kb(),
     )
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — enter phone
+# Step 5 — share phone via contact button
 # ---------------------------------------------------------------------------
 
-@router.message(BookingFSM.enter_phone, F.text)
-async def step_phone_entered(message: Message, state: FSMContext) -> None:
-    phone = message.text.strip()
-    digits = "".join(c for c in phone if c.isdigit())
-    if len(digits) < 10:
-        await message.answer(
-            "Номер телефона кажется неверным. Введите номер ещё раз:",
-            reply_markup=_cancel_kb(),
-        )
-        return
+@router.message(BookingFSM.share_phone, F.contact)
+async def step_phone_contact(message: Message, state: FSMContext) -> None:
+    phone = message.contact.phone_number
+    if not phone.startswith("+"):
+        phone = "+" + phone
 
     await state.update_data(client_phone=phone)
     data = await state.get_data()
@@ -305,7 +311,17 @@ async def step_phone_entered(message: Message, state: FSMContext) -> None:
         "Всё верно?"
     )
     await state.set_state(BookingFSM.confirm)
+    # Remove the reply keyboard, then show inline confirmation
+    await message.answer("✅ Номер получен!", reply_markup=ReplyKeyboardRemove())
     await message.answer(summary, parse_mode="HTML", reply_markup=_confirm_kb())
+
+
+@router.message(BookingFSM.share_phone, ~F.text.startswith("/"))
+async def step_phone_fallback(message: Message) -> None:
+    await message.answer(
+        "Нажмите кнопку «📱 Поделиться номером» 👇",
+        reply_markup=_phone_kb(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -316,15 +332,12 @@ async def step_phone_entered(message: Message, state: FSMContext) -> None:
 async def step_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
 
-    # 1. Mark slot busy in Supabase
     db.mark_slot_busy(data["slot_id"])
 
-    # 2. Mark slot event busy in Google Calendar "Слоты"
     slot_row = db.get_slot_by_id(data["slot_id"])
     if slot_row and slot_row.get("calendar_event_id"):
         cal.mark_slot_event_busy(slot_row["calendar_event_id"])
 
-    # 3. Create event in "Записи клиентов"
     booking_cal_id = cal.create_booking_event(
         client_name=data["client_name"],
         service_name=data["service_name"],
@@ -334,7 +347,6 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> 
         duration_min=data["duration_min"],
     )
 
-    # 4. Save booking to Supabase
     db.create_booking(
         telegram_id=callback.from_user.id,
         client_name=data["client_name"],
@@ -344,7 +356,6 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> 
         calendar_event_id=booking_cal_id,
     )
 
-    # 5. Notify master
     await notifications.notify_new_booking(
         bot=bot,
         client_name=data["client_name"],
@@ -359,13 +370,13 @@ async def step_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot) -> 
         f"✅ Запись подтверждена!\n\n"
         f"💅 {data['service_name']}\n"
         f"📅 {_fmt_date(data['slot_date'])} в {data['slot_time']}\n\n"
-        "Мы пришлём вам напоминание за 24 и за 2 часа до записи."
+        "Напомним за 24 и за 2 часа до записи 🔔"
     )
     await callback.answer("Запись сохранена!")
 
 
-@router.message(BookingFSM.confirm)
-async def step_confirm_text(message: Message, state: FSMContext) -> None:
+@router.message(BookingFSM.confirm, ~F.text.startswith("/"))
+async def step_confirm_text(message: Message) -> None:
     await message.answer(
         "Пожалуйста, используйте кнопки ниже 👇",
         reply_markup=_confirm_kb(),

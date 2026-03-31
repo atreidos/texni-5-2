@@ -29,7 +29,7 @@ supabase_schema.sql       — DB schema + seed data (run once in Supabase SQL ed
     → [select_date]
     → [select_time]
     → [enter_name]      ← free text input
-    → [enter_phone]     ← free text input
+    → [share_phone]     ← Telegram contact-sharing button (ReplyKeyboard)
     → [confirm]         ← button only
       → write Supabase + mark Calendar + notify master
 ```
@@ -71,7 +71,8 @@ Client Telegram message
 ## AI extension points (v2)
 
 - `services/ai_service.py` — all stubs, activated via `AI_ENABLED=true`
-- `enter_name` / `enter_phone` already accept free text — AI normalisation plugs in transparently
+- `enter_name` accepts free text — AI normalisation plugs in transparently
+- `share_phone` uses Telegram contact sharing; in v2 AI can also parse text phone input as fallback
 - `select_date` / `select_time` — will add text branch → `ai_service.parse_datetime()` → same callback path
 - `MAIN_MENU` text input → `ai_service.detect_intent()` → route to FSM state
 - RAG: pgvector extension in same Supabase project, no new services needed

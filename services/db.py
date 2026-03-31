@@ -108,6 +108,34 @@ def create_slot(
     return res.data[0]
 
 
+def get_existing_times_for_date(slot_date: str) -> set[str]:
+    """Return HH:MM times that already have a slot on this date (any status)."""
+    res = (
+        get_client()
+        .table("slots")
+        .select("slot_time")
+        .eq("slot_date", slot_date)
+        .execute()
+    )
+    result: set[str] = set()
+    for row in res.data or []:
+        result.add(str(row["slot_time"])[:5])
+    return result
+
+
+def slot_exists(slot_date: str, slot_time: str) -> bool:
+    res = (
+        get_client()
+        .table("slots")
+        .select("id")
+        .eq("slot_date", slot_date)
+        .eq("slot_time", slot_time)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
 def get_slot_by_id(slot_id: str) -> Optional[dict]:
     res = (
         get_client().table("slots").select("*").eq("id", slot_id).limit(1).execute()
